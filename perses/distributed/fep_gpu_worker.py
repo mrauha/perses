@@ -1,7 +1,6 @@
 import perses.distributed.feptasks as feptasks
 import pika
 from pika import spec, channel
-from typing import Union
 import pickle
 from io import BytesIO
 
@@ -11,9 +10,50 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
     The callback function that handles tasks placed in the minimize queue. The arguments to this function have a standard
     form based on the AMQP client library pika. The data to be processed is in the body. This method acknowledges the completion
     of its task.
-    """
-    pass
 
+    Parameters
+    ----------
+    ch : pika.channel
+    method : spec.Basic.Deliver
+    properties : spec.BasicProperties
+    body : bytes
+    """
+    ch.exchange_declare(exchange='utilities', exchange_type='topic')
+
+    routing_key = method.routing_key
+
+    routing_key_parts = routing_key.split(".")
+    calculation_name = routing_key_parts[0]
+    lambda_value = routing_key_parts[1]
+
+    minimization_prefix_key = ".".join([calculation_name, lambda_value, "utils.minimization_result"])
+
+    #first, we need to unpack the contents of the body:
+    input_data_bytesio = BytesIO(initial_bytes=body)
+    input_arguments = pickle.load(input_data_bytesio)
+
+    try:
+        thermodynamic_state = input_arguments['thermodynamic_state']
+        sampler_state = input_arguments['sampler_state']
+        mc_move = input_arguments['mc_move']
+
+    except KeyError as e:
+        error_routing_key = ".".join([minimization_prefix_key, "error"])
+        msg = "%s was absent from the parameters. It is required" % str(e)
+        ch.basic_publish(exchange="utils", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        return
+
+    #run the task:
+    sampler_state_min = feptasks.minimize(thermodynamic_state, sampler_state, mc_move)
+
+    #package sampler state to return it
+    sampler_state_bytes = BytesIO()
+    pickle.dump(sampler_state_min, sampler_state_bytes)
+    routing_key_minimized = ".".join([minimization_prefix_key, "minimized_result"])
+
+    ch.basic_publish(exchange="utils", routing_key=routing_key_minimized, body=sampler_state_bytes.getvalue())
+
+    ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
