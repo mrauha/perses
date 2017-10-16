@@ -26,7 +26,7 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
     calculation_name = routing_key_parts[0]
     lambda_value = routing_key_parts[1]
 
-    minimization_prefix_key = ".".join([calculation_name, lambda_value, "utils.minimization_result"])
+    minimization_prefix_key = ".".join([calculation_name, lambda_value, "utils.minimization"])
 
     #first, we need to unpack the contents of the body:
     input_data_bytesio = BytesIO(initial_bytes=body)
@@ -41,6 +41,7 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
         error_routing_key = ".".join([minimization_prefix_key, "error"])
         msg = "%s was absent from the parameters. It is required" % str(e)
         ch.basic_publish(exchange="utils", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
     #run the task:
@@ -49,7 +50,7 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
     #package sampler state to return it
     sampler_state_bytes = BytesIO()
     pickle.dump(sampler_state_min, sampler_state_bytes)
-    routing_key_minimized = ".".join([minimization_prefix_key, "minimized_result"])
+    routing_key_minimized = ".".join([minimization_prefix_key, "result"])
 
     ch.basic_publish(exchange="utils", routing_key=routing_key_minimized, body=sampler_state_bytes.getvalue())
 
@@ -104,6 +105,7 @@ def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: sp
         error_routing_key = ".".join([equilibrium_prefix_key, "error"])
         msg = "%s was absent from the parameters. It is required" % str(e)
         ch.basic_publish(exchange="equilibrium", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
     #now check if the optional arguments are present. If so, unpack them:
@@ -218,6 +220,7 @@ def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties:
         error_routing_key = ".".join([nonequilibrium_prefix_key, "error"])
         msg = "%s was absent from the parameters. It is required" % str(e)
         ch.basic_publish(exchange="nonequilibrium", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        ch.basic_ack(delivery_tag=method.delivery_tag)
         return
 
     if 'atom_indices_to_save' in input_arguments.keys():
@@ -253,7 +256,50 @@ def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties:
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def reduced_potential_callback(ch, method, properties, body):
-    pass
+    """
+    This callback is used to handle requests to compute a reduced potential.
+
+    Parameters
+    ----------
+    ch : pika.channel
+    method : spec.Basic.Deliver
+    properties : spec.BasicProperties
+    body : bytes
+    """
+
+    ch.exchange_declare(exchange='utilities', exchange_type='topic')
+
+    routing_key = method.routing_key
+
+    routing_key_parts = routing_key.split(".")
+    calculation_name = routing_key_parts[0]
+    lambda_value = routing_key_parts[1]
+
+    reduced_potential_prefix_key = ".".join([calculation_name, lambda_value, "utils.reduced_potential"])
+
+    #first, we need to unpack the contents of the body:
+    input_data_bytesio = BytesIO(initial_bytes=body)
+    input_arguments = pickle.load(input_data_bytesio)
+
+    try:
+        thermodynamic_state = input_arguments['thermodynamic_state']
+        sampler_state = input_arguments['sampler_state']
+
+    except KeyError as e:
+        error_routing_key = ".".join([reduced_potential_prefix_key, "error"])
+        msg = "%s was absent from the parameters. It is required" % str(e)
+        ch.basic_publish(exchange="utils", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        return
+
+    reduced_potential = feptasks.compute_reduced_potential(thermodynamic_state, sampler_state)
+
+    rp_bytes = BytesIO()
+    pickle.dump(reduced_potential, rp_bytes)
+
+    routing_key_reduced_potential = ".".join([reduced_potential_prefix_key, "result"])
+    ch.basic_publish(exchange="utils", routing_key=routing_key_reduced_potential, body=rp_bytes)
+    ch.basic_ack(delivery_tag=method.delivery_tag)
 
 if __name__=="__main__":
     pass
