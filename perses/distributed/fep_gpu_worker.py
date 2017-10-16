@@ -1,11 +1,13 @@
 import perses.distributed.feptasks as feptasks
 import pika
-from pika import spec, channel
+from pika import spec, channel as rmq_channel
 import pickle
 from io import BytesIO
+import logging
 
+_logger = logging.getLogger("gpu_worker")
 
-def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
+def minimize_callback(ch: rmq_channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
     The callback function that handles tasks placed in the minimize queue. The arguments to this function have a standard
     form based on the AMQP client library pika. The data to be processed is in the body. This method acknowledges the completion
@@ -26,7 +28,7 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
     calculation_name = routing_key_parts[0]
     lambda_value = routing_key_parts[1]
 
-    minimization_prefix_key = ".".join([calculation_name, lambda_value, "utils.minimization"])
+    minimization_prefix_key = ".".join([calculation_name, lambda_value, "utilities.minimization"])
 
     #first, we need to unpack the contents of the body:
     input_data_bytesio = BytesIO(initial_bytes=body)
@@ -52,11 +54,11 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
     pickle.dump(sampler_state_min, sampler_state_bytes)
     routing_key_minimized = ".".join([minimization_prefix_key, "result"])
 
-    ch.basic_publish(exchange="utils", routing_key=routing_key_minimized, body=sampler_state_bytes.getvalue())
+    ch.basic_publish(exchange="utilities", routing_key=routing_key_minimized, body=sampler_state_bytes.getvalue())
 
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
-def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
+def equilibrium_callback(ch: rmq_channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
     The method that is called to process a request to run some equilibrium dynamics. The body needs to contain:
     sampler_state, thermodynamic_state, mc_move, topology, n_iterations, n_cycles (this is the number of times to run the
@@ -176,7 +178,7 @@ def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: sp
 
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
-def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
+def nonequilibrium_callback(ch: rmq_channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
     This is a callback that is called when there is a request to run nonequilibrium switching protocols. It calls the
     appropriate task, and then sorts the results into various topics for writing and logging.
@@ -255,7 +257,7 @@ def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties:
 
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
-def reduced_potential_callback(ch, method, properties, body):
+def reduced_potential_callback(ch: rmq_channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
     This callback is used to handle requests to compute a reduced potential.
 
@@ -275,7 +277,7 @@ def reduced_potential_callback(ch, method, properties, body):
     calculation_name = routing_key_parts[0]
     lambda_value = routing_key_parts[1]
 
-    reduced_potential_prefix_key = ".".join([calculation_name, lambda_value, "utils.reduced_potential"])
+    reduced_potential_prefix_key = ".".join([calculation_name, lambda_value, "utilitiess.reduced_potential"])
 
     #first, we need to unpack the contents of the body:
     input_data_bytesio = BytesIO(initial_bytes=body)
@@ -298,8 +300,45 @@ def reduced_potential_callback(ch, method, properties, body):
     pickle.dump(reduced_potential, rp_bytes)
 
     routing_key_reduced_potential = ".".join([reduced_potential_prefix_key, "result"])
-    ch.basic_publish(exchange="utils", routing_key=routing_key_reduced_potential, body=rp_bytes)
+    ch.basic_publish(exchange="utilities", routing_key=routing_key_reduced_potential, body=rp_bytes)
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 if __name__=="__main__":
-    pass
+    rabbitmq_address = "localhost"
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+    channel = connection.channel()
+
+    exchanges = ['equilibrium', 'nonequilibrium', 'utilities']
+
+    queues = ['equilibrium', 'nonequilibrium', 'minimize', 'reduced_potential']
+
+    for exchange in exchanges:
+        channel.exchange_declare(exchange=exchange, exchange_type="topic")
+
+    for queue in queues:
+        channel.queue_declare(queue=queue)
+
+    #bind the queues to their appropriate topics:
+
+    #Bind the equilibrium queue to routing keys from any calculation that are of type equilibrium resume
+    channel.queue_bind(exchange="equilibrium", queue="equilibrium", routing_key="*.*.equilibrium.resume")
+
+    #do a similar thing for the nonequilibrium queue--it doesn't care which project ID or lambda state
+    channel.queue_bind(exchange="nonequilibrium", queue="nonequilibrium", routing_key="*.*.nonequilibrium.run")
+
+    #bind the minimize queue with the appropriate routing key
+    channel.queue_bind(exchange="utilities", queue="minimize", routing_key="*.*.utilities.minimize.run")
+    channel.queue_bind(exchange="utilities", queue="reduced_potential", routing_key="*.*.utilities.reduced_potential.run")
+
+    #add the callbacks as consumers of these queues:
+    channel.basic_consume(minimize_callback, queue="minimize")
+    channel.basic_consume(reduced_potential_callback, queue="reduced_potential")
+    channel.basic_consume(equilibrium_callback, queue="equilibrium")
+    channel.basic_consume(nonequilibrium_callback, queue="nonequilibrium")
+
+    #make sure we don't get a huge amount of requests while still processing:
+    channel.basic_qos(prefetch_count=1)
+
+    _logger.info("Beginning to consume GPU tasks.")
+
+    channel.start_consuming()
