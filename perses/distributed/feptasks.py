@@ -33,26 +33,11 @@ broker_name_server = "redis://localhost"
 
 
 #Make containers for results from tasklets. This allows us to chain tasks together easily.
-EquilibriumResult = NamedTuple('EquilibriumResult', [('sampler_state', states.SamplerState), ('trajectory', md.Trajectory), ('reduced_potential', float)])
-NonequilibriumResult = NamedTuple('NonequilibriumResult', [('trajectory', md.Trajectory), ('cumulative_work', np.array)])
 
 
-
-def get_broker_name():
-    """
-    This is a utility function for getting the broker location
-    """
-    redis_client = redis.Redis(host=broker_name_server)
-    broker_location = redis_client.get("broker_location")
-
-    if broker_location is None:
-        raise ValueError("The specified broker name server does not contain a record of a broker.")
-
-    return broker_location
-
-broker_location = broker_name_server
-app = celery.Celery('perses.distributed.feptasks', broker=broker_location, backend=broker_location)
-app.conf.update(accept_content=['pickle', 'application/x-python-serialize'], task_serializer='pickle', result_serializer='pickle')
+#broker_location = broker_name_server
+#app = celery.Celery('perses.distributed.feptasks', broker=broker_location, backend=broker_location)
+#app.conf.update(accept_content=['pickle', 'application/x-python-serialize'], task_serializer='pickle', result_serializer='pickle')
 
 class NonequilibriumSwitchingMove(mcmc.BaseIntegratorMove):
     """
@@ -162,26 +147,9 @@ class NonequilibriumSwitchingMove(mcmc.BaseIntegratorMove):
         self._integrator._measure_heat = serialization['measure_heat']
         self._integrator._metropolized_integrator = serialization['metropolized_integrator']
 
-
-def update_broker_location(broker_location, backend_location=None):
-    """
-    Update the location of the broker and backend from the default.
-
-    Parameters
-    ----------
-    broker_location : str
-        the url of the broker
-    backend_location: str, optional
-        the url of the backend. If none, broker_location is used.
-    """
-    if backend_location is None:
-        backend_location = broker_location
-    app.conf.update(broker=broker_location, backend=broker_location)
-
-@app.task(serializer="pickle")
-def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: states.ThermodynamicState,
+def run_protocol(sampler_state: states.SamplerState, thermodynamic_state: states.ThermodynamicState,
                  ne_mc_move: NonequilibriumSwitchingMove, topology: md.Topology, n_iterations: int,
-                 atom_indices_to_save: List[int] = None) -> NonequilibriumResult:
+                 atom_indices_to_save: List[int] = None) -> Tuple[md.Trajectory, np.array]:
     """
     Perform a nonequilibrium switching protocol and return the nonequilibrium protocol work. Note that it is expected
     that this will perform an entire protocol, that is, switching lambda completely from 0 to 1, in increments specified
@@ -189,8 +157,8 @@ def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: sta
 
     Parameters
     ----------
-    equilibrium_result : EquilibriumResult namedtuple
-        The result of an equilibrium simulation
+    sampler_state : states.SamplerState
+       SamplerState necessary to resume and begin nonequilibrium switching
     thermodynamic_state : openmmtools.states.ThermodynamicState
         The thermodynamic state at which to run the protocol
     ne_mc_move : perses.distributed.relative_setup.NonequilibriumSwitchingMove
@@ -204,13 +172,11 @@ def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: sta
 
     Returns
     -------
-    nonequilibrium_result : NonequilibriumResult
-        result object containing the trajectory of the nonequilibrium calculation, as well as the cumulative work
-        for each frame.
+    trajectory : md.Trajectory
+        the trajectory along the switching protocol
+    cumulative_work : np.array of floats
+        the cumulative work along the switching protocol
     """
-    #get the sampler state needed for the simulation
-    sampler_state = equilibrium_result.sampler_state
-
     #get the atom indices we need to subset the topology and positions
     if atom_indices_to_save is None:
         atom_indices = list(range(topology.n_atoms))
@@ -251,15 +217,11 @@ def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: sta
     #create an MDTraj trajectory with this data
     trajectory = md.Trajectory(trajectory_positions, subset_topology, unitcell_lengths=trajectory_box_lengths, unitcell_angles=trajectory_box_angles)
 
-    #create a result object and return that
-    nonequilibrium_result = NonequilibriumResult(trajectory, cumulative_work)
+    return trajectory, cumulative_work
 
-    return nonequilibrium_result
-
-@app.task(serializer="pickle")
-def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: states.ThermodynamicState,
+def run_equilibrium(sampler_state: states.SamplerState, thermodynamic_state: states.ThermodynamicState,
                     mc_move: mcmc.MCMCMove, topology: md.Topology, n_iterations: int,
-                    atom_indices_to_save: List[int] = None) -> EquilibriumResult:
+                    atom_indices_to_save: List[int] = None) -> Tuple[states.SamplerState, md.Trajectory, float]:
     """
     Run nsteps of equilibrium sampling at the specified thermodynamic state and return the final sampler state
     as well as a trajectory of the positions after each application of an MCMove. This means that if the MCMove
@@ -268,8 +230,8 @@ def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: 
 
     Parameters
     ----------
-    equilibrium_result : EquilibriumResult
-       EquilibriumResult namedtuple containing the information necessary to resume
+    sampler_state : states.SamplerState
+       SamplerState necessary to resume
     thermodynamic_state : openmmtools.states.ThermodynamicState
         The thermodynamic state (including context parameters) that should be used
     mc_move : openmmtools.mcmc.MCMove
@@ -284,11 +246,13 @@ def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: 
 
     Returns
     -------
-    equilibrium_result : EquilibriumResult
-        Container namedtuple that has the SamplerState for resuming, an MDTraj trajectory, and the reduced potential of the
-        final frame.
+    sampler_state : states.SamplerState
+        The final state of the sampler, necessary to resume
+    trajectory : md.Trajectory
+        The trajectory of the equilibrium simulation
+    reduced_potential_final_frame : float
+        The reduced potential of the final frame
     """
-    sampler_state = equilibrium_result.sampler_state
 
     #get the atom indices we need to subset the topology and positions
     if atom_indices_to_save is None:
@@ -322,12 +286,8 @@ def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: 
     #get the reduced potential from the final frame for endpoint perturbations
     reduced_potential_final_frame = thermodynamic_state.reduced_potential(sampler_state)
 
-    #construct equilibrium result object
-    equilibrium_result = EquilibriumResult(sampler_state, trajectory, reduced_potential_final_frame)
+    return sampler_state, trajectory, reduced_potential_final_frame
 
-    return equilibrium_result
-
-@app.task(serializer="pickle")
 def minimize(thermodynamic_state: states.ThermodynamicState, sampler_state: states.SamplerState, mc_move: mcmc.MCMCMove,
              max_iterations: int=20) -> states.SamplerState:
     """
@@ -355,7 +315,6 @@ def minimize(thermodynamic_state: states.ThermodynamicState, sampler_state: stat
     mcmc_sampler.minimize(max_iterations=max_iterations)
     return mcmc_sampler.sampler_state
 
-@app.task(serializer="pickle")
 def compute_reduced_potential(thermodynamic_state: states.ThermodynamicState, sampler_state: states.SamplerState) -> float:
     """
     Compute the reduced potential of the given SamplerState under the given ThermodynamicState.
@@ -376,52 +335,39 @@ def compute_reduced_potential(thermodynamic_state: states.ThermodynamicState, sa
     sampler_state.apply_to_context(context, ignore_velocities=True)
     return thermodynamic_state.reduced_potential(context)
 
-@app.task(serializer="pickle")
-def write_nonequilibrium_trajectory(nonequilibrium_result: NonequilibriumResult, trajectory_filename: str, cum_work_filename: str) -> float:
+def write_nonequilibrium_trajectory(nonequilibrium_trajectory: md.Trajectory, cumulative_work: np.array, trajectory_filename: str, cum_work_filename: str) -> float:
     """
     Write the results of a nonequilibrium switching trajectory to a file. The trajectory is written to an
     mdtraj hdf5 file, whereas the cumulative work is written to a numpy file.
 
     Parameters
     ----------
-    nonequilibrium_result : NonequilibriumResult namedtuple
-        The result of a nonequilibrium switching calculation
+    nonequilibrium_trajectory: md.Trajectory
+        The trajectory result of a nonequilibrium switching calculation
     trajectory_filename : str
         The full filepath for where to store the trajectory
     cum_work_filename : str
         The full filepath for where to store the work trajectory
-
-    Returns
-    -------
-    final_work : float
-        The final value of the work trajectory
     """
-    nonequilibrium_result.trajectory.save_hdf5(trajectory_filename)
-    np.save(cum_work_filename, nonequilibrium_result.cumulative_work)
 
-    return nonequilibrium_result.cumulative_work[-1]
+    nonequilibrium_trajectory.save_hdf5(trajectory_filename)
+    np.save(cum_work_filename, cumulative_work)
 
-@app.task(serializer="pickle")
-def write_equilibrium_trajectory(equilibrium_result: EquilibriumResult, trajectory_filename: str) -> float:
+def write_equilibrium_trajectory(equilibrium_trajectory: md.Trajectory, trajectory_filename: str) -> float:
     """
     Write the results of an equilibrium simulation to disk. This task will append the results to the given filename.
     Parameters
     ----------
-    equilibrium_result : EquilibriumResult namedtuple
-        the result of an equilibrium calculation
+    equilibrium_trajectory : md.Trajectory
+        the trajectory to write
     trajectory_filename : str
         the name of the trajectory file to which we should append
-
-    Returns
-    -------
-    reduced_potential_final_frame : float
-        the reduced potential of the final frame
     """
+    
     if not os.path.exists(trajectory_filename):
-        equilibrium_result.trajectory.save_hdf5(trajectory_filename)
+        equilibrium_trajectory.save_hdf5(trajectory_filename)
     else:
         written_traj = md.load_hdf5(trajectory_filename)
-        concatenated_traj = written_traj.join(equilibrium_result.trajectory)
+        concatenated_traj = written_traj.join(equilibrium_trajectory)
         concatenated_traj.save_hdf5(trajectory_filename)
 
-    return equilibrium_result.reduced_potential
