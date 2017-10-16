@@ -363,7 +363,7 @@ def write_equilibrium_trajectory(equilibrium_trajectory: md.Trajectory, trajecto
     trajectory_filename : str
         the name of the trajectory file to which we should append
     """
-    
+
     if not os.path.exists(trajectory_filename):
         equilibrium_trajectory.save_hdf5(trajectory_filename)
     else:
