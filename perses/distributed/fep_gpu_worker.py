@@ -130,8 +130,78 @@ def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: sp
         #the information needed to run this will also be in the resume task input.
         ch.basic_publish(exchange="nonequilibrium", routing_key=nonequilibrium_routing_key, body=resume_task_input.getvalue())
 
-def nonequilibrium_callback(ch, method, properties, body):
-    pass
+def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
+    """
+    This is a callback that is called when there is a request to run nonequilibrium switching protocols. It calls the
+    appropriate task, and then sorts the results into various topics for writing and logging.
+
+    Parameters
+    ----------
+    ch : pika.channel
+    method : spec.Basic.Deliver
+    properties : spec.BasicProperties
+    body : bytes
+    """
+
+    #declare the exchanges that we will use
+    ch.exchange_declare(exchange='nonequilibrium', exchange_type='topic')
+    ch.exchange_declare(exchange='utilities', exchange_type='topic')
+
+    #get the routing key, since we are listening to all requests for equilibrium tasks:
+    routing_key = method.routing_key
+
+    #the routing key that we are listening to is *.*.equilibrium.resume
+    #the first wildcard is a calculation name, the second is the lambda state (0 or 1)
+    #this is used to direct tasks to the appropriate write and log queues
+    routing_key_parts = routing_key.split(".")
+    calculation_name = routing_key_parts[0]
+    lambda_value = routing_key_parts[1]
+
+    nonequilibrium_prefix_key = ".".join([calculation_name, lambda_value, "nonequilibrium"])
+
+    input_arguments_bytes = BytesIO(initial_bytes=body)
+    input_arguments = pickle.load(input_arguments_bytes)
+
+    #unpack the input arguments:
+    try:
+        sampler_state = input_arguments['sampler_state']
+        thermodynamic_state = input_arguments['thermodynamic_state']
+        ne_mc_move = input_arguments['ne_mc_move']
+        topology = input_arguments['topology']
+        n_iterations = input_arguments['n_iterations']
+    except KeyError as e:
+        return
+
+    if 'atom_indices_to_save' in input_arguments.keys():
+        atom_indices_to_save = input_arguments['atom_indices_to_save']
+    else:
+        atom_indices_to_save = None
+
+    #run the protocol
+    trajectory, cumulative_work = feptasks.run_protocol(sampler_state, thermodynamic_state, ne_mc_move, topology, n_iterations, atom_indices_to_save=atom_indices_to_save)
+
+    trajectory_routing_key = ".".join([nonequilibrium_prefix_key, "trajectory"])
+    work_routing_key = ".".join([nonequilibrium_prefix_key, "work_output"])
+
+    #send the results to the appropriate topics:
+
+    #first, let's send results to the write task:
+    write_task_bytes = BytesIO()
+    write_task_input = dict()
+    write_task_input['trajectory'] = trajectory
+    write_task_input['cumulative_work'] = cumulative_work
+    pickle.dump(write_task_input, write_task_bytes)
+
+    #send to topic:
+    ch.basic_publish(exchange='nonequilibrium', routing_key=trajectory_routing_key, body=write_task_bytes.getvalue())
+
+    #now, let's send the cumulative work trajectory (much smaller) to the work output topic
+    work_output_bytes = BytesIO()
+    pickle.dump(cumulative_work, work_output_bytes)
+
+    #send to topic:
+    ch.basic_publish(exchange='nonequilibrium', routing_key=work_routing_key, body=work_output_bytes.getvalue())
+
 
 def reduced_potential_callback(ch, method, properties, body):
     pass
