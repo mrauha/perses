@@ -62,7 +62,10 @@ def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: sp
         cycle_count = input_arguments['cycle_count']
 
     except KeyError as e:
-        return #fill in a call back to the error queue
+        error_routing_key = ".".join([equilibrium_prefix_key, "error"])
+        msg = "%s was absent from the parameters. It is required" % str(e)
+        ch.basic_publish(exchange="equilibrium", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        return
 
     #now check if the optional arguments are present. If so, unpack them:
     if 'atom_indices_to_save' in input_arguments.keys():
@@ -169,9 +172,13 @@ def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties:
         ne_mc_move = input_arguments['ne_mc_move']
         topology = input_arguments['topology']
         n_iterations = input_arguments['n_iterations']
-    except KeyError as e:
-        return
 
+    except KeyError as e:
+        error_routing_key = ".".join([nonequilibrium_prefix_key, "error"])
+        msg = "%s was absent from the parameters. It is required" % str(e)
+        ch.basic_publish(exchange="nonequilibrium", routing_key=error_routing_key, body=msg.encode('utf-8'))
+        return
+    
     if 'atom_indices_to_save' in input_arguments.keys():
         atom_indices_to_save = input_arguments['atom_indices_to_save']
     else:
