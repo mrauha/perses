@@ -15,7 +15,6 @@ def minimize_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.
     pass
 
 
-
 def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
     The method that is called to process a request to run some equilibrium dynamics. The body needs to contain:
@@ -133,6 +132,8 @@ def equilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: sp
         #the information needed to run this will also be in the resume task input.
         ch.basic_publish(exchange="nonequilibrium", routing_key=nonequilibrium_routing_key, body=resume_task_input.getvalue())
 
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
 def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
     This is a callback that is called when there is a request to run nonequilibrium switching protocols. It calls the
@@ -178,7 +179,7 @@ def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties:
         msg = "%s was absent from the parameters. It is required" % str(e)
         ch.basic_publish(exchange="nonequilibrium", routing_key=error_routing_key, body=msg.encode('utf-8'))
         return
-    
+
     if 'atom_indices_to_save' in input_arguments.keys():
         atom_indices_to_save = input_arguments['atom_indices_to_save']
     else:
@@ -209,6 +210,7 @@ def nonequilibrium_callback(ch: channel, method: spec.Basic.Deliver, properties:
     #send to topic:
     ch.basic_publish(exchange='nonequilibrium', routing_key=work_routing_key, body=work_output_bytes.getvalue())
 
+    ch.basic_ack(delivery_tag=method.delivery_tag)
 
 def reduced_potential_callback(ch, method, properties, body):
     pass
