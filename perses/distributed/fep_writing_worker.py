@@ -88,5 +88,38 @@ def write_nonequilibrium_callback(ch: rmq_channel, method: spec.Basic.Deliver, p
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 if __name__=="__main__":
+    rabbitmq_location = "localhost"
+
+    #get the destination directory from the arguments
     destination_directory = sys.argv[1]
-    
+
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host=rabbitmq_location))
+    channel = connection.channel()
+
+    #we'll be listening to these exchanges
+    exchanges = ['equilibrium', 'nonequilibrium']
+
+    #on these queues:
+    queues = ['write_equilibrium', 'write_nonequilbrium']
+
+    for exchange in exchanges:
+        channel.exchange_declare(exchange=exchange, exchange_type="topic")
+
+    for queue in queues:
+        channel.queue_declare(queue=queue)
+
+    #bind the queues to the appropriate topics:
+    channel.queue_bind(queue="write_equilibrium", exchange="equilibrium", routing_key="*.*.equilibrium.trajectory")
+    channel.queue_bind(queue="write_nonequilibrium", exchange="nonequilibrium", routing_key="*.*.nonequilibrium.trajectory")
+
+    #register the callbacks
+    channel.basic_consume(write_equilibrium_callback, queue="write_equilibrium")
+    channel.basic_consume(write_nonequilibrium_callback, queue="write_nonequilibrium")
+
+    #set QoS to prefetch count 1--this prevents multiple messages from being delivered to the same worker
+    #while leaving other workers idle
+    channel.basic_qos(prefetch_count=1)
+
+    _logger.info("Beginning consume task...")
+
+    channel.start_consuming()
