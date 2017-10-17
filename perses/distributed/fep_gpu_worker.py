@@ -5,7 +5,7 @@ import pickle
 from io import BytesIO
 import logging
 
-_logger = logging.getLogger("gpu_worker")
+_logger = logging.getLogger(__name__)
 
 def minimize_callback(ch: rmq_channel, method: spec.Basic.Deliver, properties: spec.BasicProperties, body: bytes):
     """
@@ -277,7 +277,7 @@ def reduced_potential_callback(ch: rmq_channel, method: spec.Basic.Deliver, prop
     calculation_name = routing_key_parts[0]
     lambda_value = routing_key_parts[1]
 
-    reduced_potential_prefix_key = ".".join([calculation_name, lambda_value, "utilitiess.reduced_potential"])
+    reduced_potential_prefix_key = ".".join([calculation_name, lambda_value, "utilities.reduced_potential"])
 
     #first, we need to unpack the contents of the body:
     input_data_bytesio = BytesIO(initial_bytes=body)
