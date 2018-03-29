@@ -251,7 +251,7 @@ class NonequilibriumSwitchingMove(mcmc.BaseIntegratorMove):
 
 
 def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: states.ThermodynamicState,
-                 alchemical_functions: dict, nstep_neq: int, topology: md.Topology, work_save_interval: int, splitting: str="V R O H R V",
+                 alchemical_functions: dict, nstep_neq: int, topology: md.Topology, work_save_interval: int, splitting: str="V R R R O H R R R V",
                  atom_indices_to_save: List[int] = None, trajectory_filename: str = None, write_configuration: bool = False) -> NonequilibriumResult:
     """
     Perform a nonequilibrium switching protocol and return the nonequilibrium protocol work. Note that it is expected
@@ -272,7 +272,7 @@ def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: sta
         An MDtraj topology for the system to generate trajectories
     work_save_interval : int
         How often to write the work and, if requested, configurations
-    splitting : str, default "V R O H R V"
+    splitting : str, default "V R R R O H R R R V
         The splitting string to use for the Langevin integration
     atom_indices_to_save : list of int, default None
         list of indices to save (when excluding waters, for instance). If None, all indices are saved.
@@ -331,7 +331,7 @@ def run_protocol(equilibrium_result: EquilibriumResult, thermodynamic_state: sta
 
 def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: states.ThermodynamicState,
                     nsteps_equil: int, topology: md.Topology, n_iterations : int,
-                    atom_indices_to_save: List[int] = None, trajectory_filename: str = None, splitting: str="V R O R V") -> EquilibriumResult:
+                    atom_indices_to_save: List[int] = None, trajectory_filename: str = None, splitting: str="V R R R O R R R V") -> EquilibriumResult:
     """
     Run nsteps of equilibrium sampling at the specified thermodynamic state and return the final sampler state
     as well as a trajectory of the positions after each application of an MCMove. This means that if the MCMove
@@ -351,13 +351,11 @@ def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: 
     n_iterations : int
         The number of times to apply the move. Note that this is not the number of steps of dynamics; it is
         n_iterations*n_steps (which is set in the MCMove).
-    splitting: str, default "V R O H R V"
-        The splitting string for the dynamics
     atom_indices_to_save : list of int, default None
         list of indices to save (when excluding waters, for instance). If None, all indices are saved.
     trajectory_filename : str, optional, default None
         Full filepath of trajectory files. If none, trajectory files are not written.
-    splitting: str, default "V R O H R V"
+    splitting: str, default "V R R R O R R R V"
         The splitting string for the dynamics
     Returns
     -------
