@@ -16,7 +16,6 @@ cache.global_context_cache.COMPATIBLE_INTEGRATOR_ATTRIBUTES.update({
      "lambda_step" : 0.0
  })
 
-
 import openmmtools.mcmc as mcmc
 import openmmtools.integrators as integrators
 import openmmtools.states as states
@@ -27,6 +26,7 @@ import mdtraj.utils as mdtrajutils
 import pickle
 import simtk.unit as unit
 
+TIMESTEP = 4.0*unit.femtoseconds
 
 #Make containers for results from tasklets. This allows us to chain tasks together easily.
 EquilibriumResult = NamedTuple('EquilibriumResult', [('sampler_state', states.SamplerState), ('reduced_potential', float)])
@@ -64,7 +64,7 @@ class NonequilibriumSwitchingMove(mcmc.BaseIntegratorMove):
 
         super(NonequilibriumSwitchingMove, self).__init__(n_steps=nsteps_neq, **kwargs)
         self._integrator = integrators.AlchemicalNonequilibriumLangevinIntegrator(alchemical_functions=alchemical_functions, nsteps_neq=nsteps_neq, 
-                                                                                  temperature=temperature, splitting=splitting)
+                                                                                  temperature=temperature, splitting=splitting, timestep=TIMESTEP)
         self._ncmc_nsteps = nsteps_neq
         
         self._work_save_interval = work_save_interval
@@ -375,7 +375,7 @@ def run_equilibrium(equilibrium_result: EquilibriumResult, thermodynamic_state: 
     n_atoms = subset_topology.n_atoms
 
     #construct the MCMove:
-    mc_move = mcmc.LangevinSplittingDynamicsMove(n_steps=nsteps_equil, splitting=splitting)
+    mc_move = mcmc.LangevinSplittingDynamicsMove(n_steps=nsteps_equil, splitting=splitting, timestep=TIMESTEP)
     mc_move.n_restart_attempts = 10
 
     #create a numpy array for the trajectory
