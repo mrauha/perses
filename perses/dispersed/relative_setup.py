@@ -142,9 +142,9 @@ class NonequilibriumFEPSetup(object):
                 barostat = openmm.MonteCarloBarostat(self._pressure, self._temperature, self._barostat_period)
             else:
                 barostat = None
-            self._system_generator = SystemGenerator(forcefield_files, barostat=barostat, forcefield_kwargs={'nonbondedMethod' : self._nonbonded_method})
+            self._system_generator = SystemGenerator(forcefield_files, barostat=barostat, forcefield_kwargs={'nonbondedMethod' : self._nonbonded_method, 'hydrogenMass': 3.0*unit.amu})
         else:
-            self._system_generator = SystemGenerator(forcefield_files)
+            self._system_generator = SystemGenerator(forcefield_files, forcefield_kwargs={'hydrogenMass': 3.0*unit.amu})
 
         #self._system_generator._forcefield.loadFile(StringIO(ffxml))
 
